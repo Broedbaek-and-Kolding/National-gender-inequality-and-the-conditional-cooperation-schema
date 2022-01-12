@@ -1,0 +1,38 @@
+model {
+
+  # Implementation of JZS priors used from here
+  # https://github.com/MicheleNuijten/BayesMed/blob/master/R/jzs_corSD.R
+  # Paper source
+  # https://link.springer.com/article/10.3758/s13428-014-0470-2
+
+  a.gamma <- 1/2
+  b.gamma <- ngroups/2
+
+  #------ priors ------------------------------------------
+  phi ~ dgamma(.01,.01)
+
+  invg ~ dgamma(a.gamma,b.gamma)
+  g <- 1/invg
+  
+  vari <- (g/phi) * invSigma
+  prec <- 1/vari
+  
+  beta0 ~ dnorm(0,1)
+  betaX ~ dnorm(0,prec)
+  
+  #------ National level regressions ----------------------------
+  for (n in 1:nnations) {
+    nat_mu[n] <- beta0 + (betaX*(X[n]))
+
+  }
+
+  sigma ~ dgamma(.01,.01)
+  
+  #----  Group level model -----------------------
+  for (g in 1:ngroups) {
+  
+    Y[g] ~ dnorm(nat_mu[Nation[g]],sigma)
+
+  }
+
+}

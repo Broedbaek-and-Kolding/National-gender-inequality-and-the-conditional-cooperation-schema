@@ -1,0 +1,118 @@
+## SKB; modelling preference for contributing ##
+# rho: readiness to cooperate
+# omega: attention to others - conditional and updated with belief about others
+# Gb: Individual's belief about how much the group will contribute on current or previous trial (depending on where it is used, t-1 = previous trial)
+# Ga: Average contribution (t-1 = observed in previous trial)
+# betaX = slope, beta0 = intercept 
+
+model {
+
+  #-------------------------------------------------------------------
+  #-------------------  National-level/regression priors -------------
+  #-------------------------------------------------------------------
+
+  # Implementation of JZS priors used from here
+  # https://github.com/MicheleNuijten/BayesMed/blob/master/R/jzs_corSD.R
+  # Paper source
+  # https://link.springer.com/article/10.3758/s13428-014-0470-2
+
+  a.gamma <- 1/2
+  b.gamma <- ngroups/2
+
+  #------ rho priors ------------------------------------------
+  phi_rho ~ dgamma(0.01,0.01)
+
+  invg_rho ~ dgamma(a.gamma,b.gamma)
+  g_rho <- 1/invg_rho
+  
+  vari_rho <- (g_rho/phi_rho) * invSigma
+  prec_rho <- 1/vari_rho
+  
+  beta0_rho ~ dnorm(0,1)
+  betaX_rho ~ dnorm(0,prec_rho)
+
+  #------ omega priors ------------------------------------------
+  phi_omega ~ dgamma(0.01,0.01)
+
+  invg_omega ~ dgamma(a.gamma,b.gamma)
+  g_omega <- 1/invg_omega
+  
+  vari_omega <- (g_omega/phi_omega) * invSigma
+  prec_omega <- 1/vari_omega
+  
+  beta0_omega ~ dnorm(0,1) 
+  betaX_omega ~ dnorm(0,prec_omega)
+
+  #------ priors on national level precision --------------------
+  nat_sigma_rho ~ dgamma(0.01,0.01)
+  nat_sigma_omega ~ dgamma(0.01,0.01)
+
+  #------ National level regressions ----------------------------
+  # SKB: This is where Gini is used: Gini = X - betaX_omega = slope 
+  for (n in 1:nnations) {
+        nat_rho_probit[n] <- beta0_rho + (betaX_rho*(X[n])) 
+        nat_omega_probit[n] <- beta0_omega + (betaX_omega*(X[n]))
+  }
+
+  #-------------------------------------------------------------------
+  #-------------------  Individual level model -----------------------
+  #-------------------------------------------------------------------
+
+  for (g in 1:ngroups) {
+  
+    for (s in 1:groupSize) {
+      
+      #subject level priors on precision of contribution estimates
+      sigma_c[s,g] <- 1 #      ~ dgamma(.01,.01)
+
+      #----------- concentration (precision) of individual level rate parameters (for beta priors)
+      sigma_rho[s,g] ~ dunif(1,100)
+      sigma_omega[s,g] ~ dunif(1,100)
+
+      #---- (standardised/probit transformed) mean of individual rate parameters
+      # sampled from national level distributions 
+      # SKB: people don't choose one number but choose from a distribution
+      mu_rho_probit[s,g] ~ dnorm(nat_rho_probit[Nation[g]],nat_sigma_rho)
+      mu_omega_probit[s,g] ~ dnorm(nat_omega_probit[Nation[g]],nat_sigma_omega)
+
+      #--------------- Model priors ------------------------------------------------------
+      # reparameterising beta prior for slope of preferences in CC model 
+      probit(mu_rho[s,g]) <- mu_rho_probit[s,g] # standardisation of rate estimate
+      shape1_rho[s,g] <- (mu_rho[s,g]) * sigma_rho[s,g]
+      shape2_rho[s,g] <- (1 - mu_rho[s,g]) * sigma_rho[s,g]
+      rho[s,g] ~ dbeta(shape1_rho[s,g],shape2_rho[s,g])T(0.001,0.999)
+
+      #updating parameter for beliefs about what others will contribute
+      probit(mu_omega[s,g]) <- mu_omega_probit[s,g] # standardisation of rate estimate
+      shape1_omega[s,g] <- (mu_omega[s,g]) * sigma_omega[s,g]
+      shape2_omega[s,g] <- (1 - mu_omega[s,g]) * sigma_omega[s,g]  
+      omega[s,g] ~ dbeta(shape1_omega[s,g],shape2_omega[s,g])T(0.001,0.999) 
+
+      #beliefs about others on first trial - uniform distribution
+      Gb[s,1,g] ~ dunif(0,20)
+      p[s,1,g] <- rho[s,g] * Gb[s,1,g]
+      c[s,1,g,1] ~ dnorm(p[s,1,g],sigma_c[s,g])
+        
+    }
+
+    #--------------- Implementation of CC model --------------------------------
+
+    for (t in 2:ntrials) {
+        
+      for (s in 1:groupSize) {
+        
+        #- Belief about group contribution
+        #Gb[s,t,g] <- (Gb[s,t-1,g]) + (omega[s,g]*(Ga[t-1,g,1] - Gb[s,t-1,g])) # commented out by Josh 
+        Gb[s,t,g] <- ((1-omega[s,g])*(Gb[s,t-1,g]))+(omega[s,g]*(Ga[t-1,g,1]))
+        
+        #- Contribution preference given belief and matching preference rho  
+        p[s,t,g] <- rho[s,g]*Gb[s,t,g]
+
+        #- Contribution as sample from preferences
+        c[s,t,g,1] ~ dnorm(p[s,t,g],sigma_c[s,g])
+      }
+        
+    }
+  }
+  
+}
